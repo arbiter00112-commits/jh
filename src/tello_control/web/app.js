@@ -570,19 +570,20 @@ function bboxAreaRatio(tracking) {
 
 function motorDirectionDeg(tracking) {
   const ultraPs = tracking.ultra_ps || tracking.ultraPs || tracking.ultraps || {};
-  const candidates = [
-    ultraPs.motor_deg,
+  if (typeof ultraPs.motor_deg === "number") {
+    return normalizeDegrees(ultraPs.motor_deg);
+  }
+  if (typeof ultraPs.front_pan === "number" && typeof ultraPs.pan_tick === "number") {
+    return normalizeDegrees(((ultraPs.front_pan - ultraPs.pan_tick) * 360) / 4096);
+  }
+  const fallback = [
     ultraPs.motor_direction_deg,
     ultraPs.fan_deg,
     ultraPs.heading_deg,
     ultraPs.direction_deg,
     tracking.ptz && tracking.ptz.pan_deg,
-  ];
-  const rawValue = candidates.find((value) => typeof value === "number");
-  if (typeof rawValue !== "number") {
-    return rawValue;
-  }
-  return normalizeDegrees(360 - rawValue);
+  ].find((value) => typeof value === "number");
+  return typeof fallback === "number" ? normalizeDegrees(fallback) : fallback;
 }
 
 function normalizeDegrees(value) {

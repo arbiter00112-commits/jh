@@ -166,19 +166,20 @@ Motor <deg> | FOV 110 deg | Bearing only | Audio <deg or ->
 
 ### Motor Direction 계산
 
-`motorDirectionDeg(tracking)`은 다음 후보 중 첫 번째 숫자 값을 사용합니다.
+`motorDirectionDeg(tracking)`은 아래 우선순위로 방향값을 고릅니다.
 
 1. `tracking.ultra_ps.motor_deg`
-2. `tracking.ultra_ps.motor_direction_deg`
-3. `tracking.ultra_ps.fan_deg`
-4. `tracking.ultra_ps.heading_deg`
-5. `tracking.ultra_ps.direction_deg`
-6. `tracking.ptz.pan_deg`
+2. `motor_deg`가 없으면 `tracking.ultra_ps.front_pan`과 `tracking.ultra_ps.pan_tick`으로 fallback 계산
+3. `tracking.ultra_ps.motor_direction_deg`
+4. `tracking.ultra_ps.fan_deg`
+5. `tracking.ultra_ps.heading_deg`
+6. `tracking.ultra_ps.direction_deg`
+7. `tracking.ptz.pan_deg`
 
-화면 표시 방향은 다음처럼 변환합니다.
+`motor_deg`는 Jetson이 계산해서 보내는 최종 표시 각도이므로 Pi 대시보드는 그대로 표시합니다. tick fallback 계산식은 다음과 같습니다.
 
 ```text
-display_deg = normalizeDegrees(360 - raw_deg)
+motor_deg = ((front_pan - pan_tick) * 360 / 4096) % 360
 ```
 
 ## Live Graphs
@@ -263,9 +264,9 @@ display_deg = normalizeDegrees(360 - raw_deg)
       "confidence": 0.62
     },
     "ultra_ps": {
-      "motor_deg": 92.0,
+      "motor_deg": 90.0,
       "front_pan": 2048,
-      "pan_tick": 3095
+      "pan_tick": 1024
     },
     "laser": {
       "armed": true,

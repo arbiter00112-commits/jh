@@ -206,9 +206,9 @@ PS 방향값은 `ultra_ps` 안에 넣습니다.
 ```json
 {
   "ultra_ps": {
-    "motor_deg": 92.0,
+    "motor_deg": 90.0,
     "front_pan": 2048,
-    "pan_tick": 3095
+    "pan_tick": 1024
   }
 }
 ```
@@ -216,11 +216,12 @@ PS 방향값은 `ultra_ps` 안에 넣습니다.
 대시보드는 아래 순서로 방향값을 찾습니다.
 
 1. `ultra_ps.motor_deg`
-2. `ultra_ps.motor_direction_deg`
-3. `ultra_ps.fan_deg`
-4. `ultra_ps.heading_deg`
-5. `ultra_ps.direction_deg`
-6. fallback: `ptz.pan_deg`
+2. `motor_deg`가 없으면 `ultra_ps.front_pan` + `ultra_ps.pan_tick`으로 fallback 계산
+3. `ultra_ps.motor_direction_deg`
+4. `ultra_ps.fan_deg`
+5. `ultra_ps.heading_deg`
+6. `ultra_ps.direction_deg`
+7. fallback: `ptz.pan_deg`
 
 각도 규칙:
 
@@ -231,37 +232,31 @@ PS 방향값은 `ultra_ps` 안에 넣습니다.
 
 ### Ultra96 PS tick -> dashboard angle 변환
 
-`ultra_ps.motor_deg`는 Ultra96 PS가 실제로 쓰는 `front_pan` 기준 360도 wrap 각도여야 합니다.
+`ultra_ps.motor_deg`는 Jetson이 계산해서 Pi 대시보드로 보내는 최종 표시 각도입니다.
 
-Ultra96 PS에서 오디오/각도 명령 `A angle`은 아래처럼 tick으로 해석됩니다.
-
-```python
-tick = (front_pan + angle * 4096 / 360) % 4096
-```
-
-따라서 Jetson이 raw pan tick을 Pi 대시보드용 각도로 바꿀 때도 같은 기준을 써야 합니다.
+Pi 대시보드 레이더는 `0 deg=위/north/front`, `90 deg=왼쪽/west`, `180 deg=아래/south/back`, `270 deg=오른쪽/east`인 compass 규칙을 유지합니다. 따라서 Jetson이 raw pan tick을 Pi 대시보드용 각도로 바꿀 때는 아래 기준을 써야 합니다.
 
 ```python
-motor_deg = ((pan_tick - front_pan) * 360.0 / 4096.0) % 360.0
+motor_deg = ((front_pan - pan_tick) * 360.0 / 4096.0) % 360.0
 ```
 
 기본 `front_pan=2048`이면 매핑은 다음과 같습니다.
 
-| Ultra96 angle | pan tick |
+| dashboard angle | pan tick |
 | --- | --- |
 | `0 deg` | `2048` |
-| `90 deg` | `3072` |
+| `90 deg` | `1024` |
 | `180 deg` | `0` |
-| `270 deg` | `1024` |
+| `270 deg` | `3072` |
 
 반대로 raw tick을 대시보드 각도로 해석하면 다음이 되어야 합니다.
 
 | pan tick | `motor_deg` |
 | --- | --- |
 | `2048` | `0 deg` |
-| `3072` | `90 deg` |
+| `1024` | `90 deg` |
 | `0` | `180 deg` |
-| `1024` | `270 deg` |
+| `3072` | `270 deg` |
 
 Jetson sender에서 아래 방식은 쓰면 안 됩니다.
 
@@ -270,11 +265,11 @@ signed_deg = ((pan - center) / half_range) * 90
 motor_deg = (-signed_deg) % 360
 ```
 
-위 방식은 `0-4095` 전체 tick 범위를 좌우 `±90 deg`처럼 해석하고 부호도 Ultra96 PS 기준과 달라서 실제 모터 각도와 Pi 대시보드 표시가 맞지 않습니다.
+위 방식은 `0-4095` 전체 tick 범위를 좌우 `±90 deg`처럼 해석해서 실제 모터 각도와 Pi 대시보드 표시가 맞지 않습니다.
 
 또한 `PAN_MIN=0`, `PAN_MAX=4095`로 만든 고정 center `2047.5`를 0도 기준으로 쓰면 안 됩니다. 실제 0도 기준은 Ultra96의 `/home/xilinx/ultra_yubin_v1/front_center.env`에 있는 `PAN=` 값 또는 PLPING/T/A 응답에서 받은 `front_pan` 값입니다.
 
-가능하면 Jetson은 `front_pan`과 현재 raw `pan_tick`도 함께 보내십시오. Pi 대시보드는 현재 `motor_deg`를 표시값으로 쓰지만, `front_pan`/`pan_tick`이 있으면 로그에서 변환 기준을 검증할 수 있습니다.
+가능하면 Jetson은 `front_pan`과 현재 raw `pan_tick`도 함께 보내십시오. Pi 대시보드는 `motor_deg`가 있으면 이 값을 그대로 표시하고, `motor_deg`가 없고 `front_pan`/`pan_tick`이 있을 때만 위 수식으로 fallback 계산합니다.
 
 ## UltraPS -> Jetson 입력 규칙
 
@@ -286,9 +281,9 @@ Jetson 내부 권장 객체:
 
 ```json
 {
-  "motor_deg": 92.0,
+  "motor_deg": 90.0,
   "front_pan": 2048,
-  "pan_tick": 3095,
+  "pan_tick": 1024,
   "confidence": 0.85,
   "source": "ultraps",
   "timestamp": 1715600000.123
@@ -300,9 +295,9 @@ Pi로 보낼 때 반드시 필요한 값은 `motor_deg` 하나입니다.
 ```json
 {
   "ultra_ps": {
-    "motor_deg": 92.0,
+    "motor_deg": 90.0,
     "front_pan": 2048,
-    "pan_tick": 3095
+    "pan_tick": 1024
   }
 }
 ```
@@ -324,13 +319,13 @@ Jetson에서 UltraPS raw 값을 파싱할 때 허용할 만한 입력 예시는 
 raw pan tick을 받는 경우:
 
 ```json
-{"pan_tick":3072,"front_pan":2048}
+{"pan_tick":1024,"front_pan":2048}
 ```
 
 이 경우 Jetson은 Pi로 보내기 전에 다음 값으로 정규화해야 합니다.
 
 ```json
-{"motor_deg":90.0,"pan_tick":3072,"front_pan":2048}
+{"motor_deg":90.0,"pan_tick":1024,"front_pan":2048}
 ```
 
 권장 alias 처리 순서:
@@ -405,7 +400,7 @@ def normalize_ultraps(raw):
         try:
             pan_tick = float(pan_tick) % 4096.0
             front_pan = float(front_pan) % 4096.0
-            motor_deg = ((pan_tick - front_pan) * 360.0 / 4096.0) % 360.0
+            motor_deg = ((front_pan - pan_tick) * 360.0 / 4096.0) % 360.0
         except (TypeError, ValueError):
             return None
 

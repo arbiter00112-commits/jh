@@ -30,7 +30,7 @@ class TelemetryModelTest(unittest.TestCase):
                 "confidence": 0.87,
                 "error": {"x_px": -170, "y_px": -110, "x_norm": -0.266, "y_norm": -0.306},
                 "audio": {"enabled": True, "direction_deg": 35.0, "confidence": 0.62},
-                "ultra_ps": {"motor_deg": 92.0, "front_pan": 2048, "pan_tick": 3095},
+                "ultra_ps": {"motor_deg": 90.0, "front_pan": 2048, "pan_tick": 1024},
             }
         ).encode()
 
@@ -41,9 +41,9 @@ class TelemetryModelTest(unittest.TestCase):
         self.assertEqual(data.state, "TRACKING")
         self.assertEqual(data.error.x_px, -170)
         self.assertEqual(data.audio.direction_deg, 35.0)
-        self.assertEqual(data.ultra_ps.motor_deg, 92.0)
+        self.assertEqual(data.ultra_ps.motor_deg, 90.0)
         self.assertEqual(data.ultra_ps.front_pan, 2048)
-        self.assertEqual(data.ultra_ps.pan_tick, 3095)
+        self.assertEqual(data.ultra_ps.pan_tick, 1024)
 
     def test_parse_minimal_packet_missing_optional_fields(self) -> None:
         data = parse_tracking_packet(

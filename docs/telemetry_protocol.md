@@ -87,9 +87,9 @@ Allowed `state` values:
     "confidence": 0.62
   },
   "ultra_ps": {
-    "motor_deg": 92.0,
+    "motor_deg": 90.0,
     "front_pan": 2048,
-    "pan_tick": 3095
+    "pan_tick": 1024
   },
   "laser": {
     "armed": false,
@@ -195,10 +195,10 @@ The dashboard shows audio as a direction arrow only.
 
 The dashboard also accepts these transitional aliases inside `ultra_ps`: `motor_direction_deg`, `fan_deg`, `heading_deg`, and `direction_deg`.
 
-`ultra_ps.motor_deg` must use the same 360-degree wrap basis as Ultra96 PS `A angle` commands:
+`ultra_ps.motor_deg` is the final dashboard display angle calculated by Jetson. The dashboard displays it as-is. If `motor_deg` is missing and both `front_pan` and `pan_tick` are present, the dashboard may use this fallback:
 
 ```text
-motor_deg = ((pan_tick - front_pan) * 360 / 4096) % 360
+motor_deg = ((front_pan - pan_tick) * 360 / 4096) % 360
 ```
 
 Do not derive dashboard `motor_deg` by treating `0-4095` as a `-90..+90` range around `2047.5`; that does not match the physical Ultra96 PS angle convention. `front_pan` should come from `/home/xilinx/ultra_yubin_v1/front_center.env` (`PAN=`) or from the latest PLPING/T/A response when available.
