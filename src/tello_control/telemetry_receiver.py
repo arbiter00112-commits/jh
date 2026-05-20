@@ -155,7 +155,11 @@ class FakeJetsonTelemetry:
                 ultra_ps=UltraPSData(
                     motor_deg=(elapsed * 28.0 + 20.0 * math.sin(elapsed * 0.9)) % 360.0,
                 ),
-                laser=LaserData(armed=state == "LOCKED", hit_detected=state == "LOCKED" and frame_id % 20 == 0),
+                laser=LaserData(
+                    armed=state == "LOCKED",
+                    fired=state == "LOCKED" and frame_id % 20 == 0,
+                    hit_detected=state == "LOCKED" and frame_id % 40 == 0,
+                ),
                 state=state,
             )
             self.store.update_tracking(data)

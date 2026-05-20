@@ -62,6 +62,8 @@ class UltraPSData:
 @dataclass(frozen=True)
 class LaserData:
     armed: bool | None = None
+    fired: bool | None = None
+    shot_count: int | None = None
     hit_detected: bool | None = None
 
 

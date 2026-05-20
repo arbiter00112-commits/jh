@@ -37,6 +37,7 @@ class TelemetryStore:
         self._last_jetson_status = "DISCONNECTED"
         self._last_audio_active = False
         self._last_laser_armed = False
+        self._last_laser_fired = False
         self._last_laser_hit = False
         self._hit_count = 0
         self._shot_count = 0
@@ -137,16 +138,23 @@ class TelemetryStore:
         self._last_audio_active = audio_active
 
         laser = data.laser
-        laser_armed = bool(laser and laser.armed)
-        laser_hit = bool(laser and laser.hit_detected)
-        shot_event = (laser_armed and not self._last_laser_armed) or (laser_hit and not self._last_laser_hit)
-        if shot_event:
+        laser_armed = self._bool_flag(laser.armed if laser else None)
+        laser_fired = self._bool_flag(laser.fired if laser else None)
+        laser_hit = self._bool_flag(laser.hit_detected if laser else None)
+        incoming_shot_count = self._int_value(laser.shot_count if laser else None)
+        shot_count_increased = incoming_shot_count is not None and incoming_shot_count > self._shot_count
+        shot_event = laser_fired and not self._last_laser_fired
+        if shot_count_increased:
+            self._shot_count = incoming_shot_count
+            self._events.append(EventLogEntry(event_timestamp, "INFO", "LASER FIRED"))
+        elif shot_event:
             self._shot_count += 1
             self._events.append(EventLogEntry(event_timestamp, "INFO", "LASER FIRED"))
         if laser_hit and not self._last_laser_hit:
             self._hit_count += 1
             self._events.append(EventLogEntry(event_timestamp, "INFO", f"HIT CONFIRMED (#{self._hit_count})"))
         self._last_laser_armed = laser_armed
+        self._last_laser_fired = laser_fired
         self._last_laser_hit = laser_hit
 
     def _record_jetson_status_event(self, status: str, age: float | None) -> None:
@@ -225,3 +233,22 @@ class TelemetryStore:
         if latency < 0 or latency > 60:
             return None
         return latency * 1000.0
+
+    @staticmethod
+    def _bool_flag(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+        if isinstance(value, (int, float)):
+            return value != 0
+        return False
+
+    @staticmethod
+    def _int_value(value: Any) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
