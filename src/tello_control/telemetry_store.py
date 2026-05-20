@@ -39,6 +39,7 @@ class TelemetryStore:
         self._last_laser_armed = False
         self._last_laser_fired = False
         self._last_laser_hit = False
+        self._last_reported_shot_count: int | None = None
         self._hit_count = 0
         self._shot_count = 0
 
@@ -142,10 +143,10 @@ class TelemetryStore:
         laser_fired = self._bool_flag(laser.fired if laser else None)
         laser_hit = self._bool_flag(laser.hit_detected if laser else None)
         incoming_shot_count = self._int_value(laser.shot_count if laser else None)
-        shot_count_increased = incoming_shot_count is not None and incoming_shot_count > self._shot_count
+        shot_count_delta = self._shot_count_delta(incoming_shot_count)
         shot_event = laser_fired and not self._last_laser_fired
-        if shot_count_increased:
-            self._shot_count = incoming_shot_count
+        if shot_count_delta > 0:
+            self._shot_count += shot_count_delta
             self._events.append(EventLogEntry(event_timestamp, "INFO", "LASER FIRED"))
         elif shot_event:
             self._shot_count += 1
@@ -252,3 +253,13 @@ class TelemetryStore:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _shot_count_delta(self, incoming: int | None) -> int:
+        if incoming is None:
+            return 0
+        if self._last_reported_shot_count is None or incoming < self._last_reported_shot_count:
+            self._last_reported_shot_count = incoming
+            return 0
+        delta = incoming - self._last_reported_shot_count
+        self._last_reported_shot_count = incoming
+        return delta

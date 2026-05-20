@@ -169,7 +169,11 @@ Motor <deg> | FOV 110 deg | Bearing only | Audio <deg or ->
 `motorDirectionDeg(tracking)`은 다음 후보 중 첫 번째 숫자 값을 사용합니다.
 
 1. `tracking.ultra_ps.motor_deg`
-2. `tracking.ptz.pan_deg`
+2. `tracking.ultra_ps.motor_direction_deg`
+3. `tracking.ultra_ps.fan_deg`
+4. `tracking.ultra_ps.heading_deg`
+5. `tracking.ultra_ps.direction_deg`
+6. `tracking.ptz.pan_deg`
 
 화면 표시 방향은 다음처럼 변환합니다.
 
@@ -259,7 +263,9 @@ display_deg = normalizeDegrees(360 - raw_deg)
       "confidence": 0.62
     },
     "ultra_ps": {
-      "motor_deg": 92.0
+      "motor_deg": 92.0,
+      "front_pan": 2048,
+      "pan_tick": 3095
     },
     "laser": {
       "armed": true,
@@ -279,12 +285,14 @@ display_deg = normalizeDegrees(360 - raw_deg)
 
 ### Shots
 
-`Shots`는 Jetson fire 입력/발사 시도 횟수입니다.
+`Shots`는 현재 Pi 대시보드 서버 세션에서 발생한 Jetson fire 입력/발사 시도 횟수입니다.
 
 권장 입력:
 
 - Jetson이 f 입력마다 `laser.shot_count`를 누적 증가
 - 또는 발사 순간 `laser.fired=true`를 보내고 다음 packet에서 `false`로 내림
+
+대시보드는 처음 받은 `laser.shot_count` 값을 기준점으로 잡고, 이후 증가분만 `Shots`에 더합니다. 그래서 Jetson이 이전 실행에서 `shot_count=33`을 계속 보내더라도 새 Pi 대시보드 세션은 `Shots=0`에서 시작합니다.
 
 `laser.armed=true`만으로는 증가하지 않습니다. `laser.hit_detected=true`만으로도 증가하지 않습니다.
 
@@ -304,4 +312,3 @@ display_deg = normalizeDegrees(360 - raw_deg)
 | `CONNECTED` | 마지막 수신 후 `1.0 sec` 이하 |
 | `STALE` | 마지막 수신 후 `1.0 sec` 초과, `3.0 sec` 이하 |
 | `DISCONNECTED` | 아직 수신 없음 또는 마지막 수신 후 `3.0 sec` 초과 |
-

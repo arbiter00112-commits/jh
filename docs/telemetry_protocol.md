@@ -87,7 +87,9 @@ Allowed `state` values:
     "confidence": 0.62
   },
   "ultra_ps": {
-    "motor_deg": 92.0
+    "motor_deg": 92.0,
+    "front_pan": 2048,
+    "pan_tick": 3095
   },
   "laser": {
     "armed": false,
@@ -105,6 +107,8 @@ The dashboard counts shots only when Jetson reports a fire action:
 
 - Preferred: increment `laser.shot_count` every time the Jetson fire key/action runs.
 - Alternative: send `laser.fired=true` for the fire event, then return it to `false`.
+
+The dashboard treats the first received `laser.shot_count` as the session baseline and displays only increases after that baseline.
 
 `laser.armed=true` does not increase shots. `laser.hit_detected=true` increases hits, not shots.
 
@@ -186,8 +190,18 @@ The dashboard shows audio as a direction arrow only.
 ### Ultra PS
 
 - `ultra_ps.motor_deg`: motor pan/drone direction angle in degrees.
+- `ultra_ps.front_pan`: optional Ultra96 PS front/zero tick used to calculate `motor_deg`.
+- `ultra_ps.pan_tick`: optional raw/current Ultra96 PS pan tick.
 
 The dashboard also accepts these transitional aliases inside `ultra_ps`: `motor_direction_deg`, `fan_deg`, `heading_deg`, and `direction_deg`.
+
+`ultra_ps.motor_deg` must use the same 360-degree wrap basis as Ultra96 PS `A angle` commands:
+
+```text
+motor_deg = ((pan_tick - front_pan) * 360 / 4096) % 360
+```
+
+Do not derive dashboard `motor_deg` by treating `0-4095` as a `-90..+90` range around `2047.5`; that does not match the physical Ultra96 PS angle convention. `front_pan` should come from `/home/xilinx/ultra_yubin_v1/front_center.env` (`PAN=`) or from the latest PLPING/T/A response when available.
 
 ## Safety Contract
 

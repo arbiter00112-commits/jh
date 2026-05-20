@@ -572,6 +572,10 @@ function motorDirectionDeg(tracking) {
   const ultraPs = tracking.ultra_ps || tracking.ultraPs || tracking.ultraps || {};
   const candidates = [
     ultraPs.motor_deg,
+    ultraPs.motor_direction_deg,
+    ultraPs.fan_deg,
+    ultraPs.heading_deg,
+    ultraPs.direction_deg,
     tracking.ptz && tracking.ptz.pan_deg,
   ];
   const rawValue = candidates.find((value) => typeof value === "number");

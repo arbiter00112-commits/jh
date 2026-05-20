@@ -57,6 +57,8 @@ class UltraPSData:
     fan_deg: float | None = None
     heading_deg: float | None = None
     direction_deg: float | None = None
+    front_pan: float | None = None
+    pan_tick: float | None = None
 
 
 @dataclass(frozen=True)

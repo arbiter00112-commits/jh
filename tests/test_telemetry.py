@@ -30,7 +30,7 @@ class TelemetryModelTest(unittest.TestCase):
                 "confidence": 0.87,
                 "error": {"x_px": -170, "y_px": -110, "x_norm": -0.266, "y_norm": -0.306},
                 "audio": {"enabled": True, "direction_deg": 35.0, "confidence": 0.62},
-                "ultra_ps": {"motor_deg": 92.0},
+                "ultra_ps": {"motor_deg": 92.0, "front_pan": 2048, "pan_tick": 3095},
             }
         ).encode()
 
@@ -42,6 +42,8 @@ class TelemetryModelTest(unittest.TestCase):
         self.assertEqual(data.error.x_px, -170)
         self.assertEqual(data.audio.direction_deg, 35.0)
         self.assertEqual(data.ultra_ps.motor_deg, 92.0)
+        self.assertEqual(data.ultra_ps.front_pan, 2048)
+        self.assertEqual(data.ultra_ps.pan_tick, 3095)
 
     def test_parse_minimal_packet_missing_optional_fields(self) -> None:
         data = parse_tracking_packet(
@@ -223,7 +225,7 @@ class TelemetryStoreTest(unittest.TestCase):
         )
         self.assertEqual(store.snapshot(now=11.1).shot_count, 2)
 
-    def test_shots_can_follow_jetson_shot_count(self) -> None:
+    def test_shots_follow_jetson_shot_count_delta_for_current_session(self) -> None:
         store = TelemetryStore()
 
         store.update_tracking(
@@ -235,18 +237,40 @@ class TelemetryStoreTest(unittest.TestCase):
             ),
             now=10.0,
         )
-        self.assertEqual(store.snapshot(now=10.1).shot_count, 3)
+        self.assertEqual(store.snapshot(now=10.1).shot_count, 0)
 
         store.update_tracking(
             JetsonTrackingData(
                 timestamp=1.1,
                 target_found=True,
                 state="LOCKED",
-                laser=LaserData(armed=True, fired=False, shot_count=2, hit_detected=False),
+                laser=LaserData(armed=True, fired=False, shot_count=5, hit_detected=False),
             ),
             now=10.2,
         )
-        self.assertEqual(store.snapshot(now=10.3).shot_count, 3)
+        self.assertEqual(store.snapshot(now=10.3).shot_count, 2)
+
+        store.update_tracking(
+            JetsonTrackingData(
+                timestamp=1.2,
+                target_found=True,
+                state="LOCKED",
+                laser=LaserData(armed=True, fired=False, shot_count=1, hit_detected=False),
+            ),
+            now=10.4,
+        )
+        self.assertEqual(store.snapshot(now=10.5).shot_count, 2)
+
+        store.update_tracking(
+            JetsonTrackingData(
+                timestamp=1.3,
+                target_found=True,
+                state="LOCKED",
+                laser=LaserData(armed=True, fired=False, shot_count=2, hit_detected=False),
+            ),
+            now=10.6,
+        )
+        self.assertEqual(store.snapshot(now=10.7).shot_count, 3)
 
 
 class VisualizationTest(unittest.TestCase):
