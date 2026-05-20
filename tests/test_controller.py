@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from tello_control.cli import command_label, handle_hit_response, handle_key
+from tello_control.cli import build_parser, command_label, handle_hit_response, handle_key
 from tello_control.controller import DroneController, DroneError
 from tello_control.rc_control import RCControlLoop
 from tello_control.rc_control import RCControlState
@@ -94,6 +94,13 @@ class DummyScenarioRunner:
 
 
 class DroneControllerTest(unittest.TestCase):
+    def test_auto_hit_response_is_enabled_by_default(self) -> None:
+        parser = build_parser()
+
+        self.assertTrue(parser.parse_args([]).auto_hit_response)
+        self.assertFalse(parser.parse_args(["--no-auto-hit-response"]).auto_hit_response)
+        self.assertTrue(parser.parse_args(["--auto-hit-response"]).auto_hit_response)
+
     def test_connect_checks_battery_and_sets_speed(self) -> None:
         fake = FakeTello(battery=70)
         controller = DroneController(fake, SafetyConfig(speed=30))

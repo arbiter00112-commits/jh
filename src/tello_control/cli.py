@@ -59,10 +59,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-dir", default="logs", help="Directory for flight/tracking logs.")
     parser.add_argument("--open-browser", action="store_true", help="Open the dashboard in the local browser.")
     parser.add_argument("--browser-display", default=":0", help="Display used when opening a browser from SSH.")
+    parser.set_defaults(auto_hit_response=True)
     parser.add_argument(
         "--auto-hit-response",
+        dest="auto_hit_response",
         action="store_true",
-        help="Trigger flip-and-land when Jetson telemetry reports laser hit_detected.",
+        help="Trigger flip-and-land when Jetson telemetry reports laser hit_detected. Enabled by default.",
+    )
+    parser.add_argument(
+        "--no-auto-hit-response",
+        dest="auto_hit_response",
+        action="store_false",
+        help="Disable flip-and-land on Jetson laser hit_detected telemetry.",
     )
     return parser
 
