@@ -13,6 +13,8 @@ const graphs = document.getElementById("graphs");
 const graphCtx = graphs.getContext("2d");
 const events = document.getElementById("events");
 const graphLegend = document.getElementById("graphLegend");
+const hitOverlay = document.getElementById("hitOverlay");
+const hitOverlayDetail = document.getElementById("hitOverlayDetail");
 
 const GRAPH_SERIES = [
   { key: "fps", label: "YOLO FPS", min: 0, max: 35, color: "#53a7ff" },
@@ -28,6 +30,10 @@ const STATE_STEPS = ["IDLE", "SEARCH", "TRACK", "LOCK", "FIRE"];
 
 let reconnectTimer = null;
 let lastSnapshot = null;
+let lastHitCount = null;
+let lastLaserHit = false;
+let hitFlashUntil = 0;
+let lastHitDetail = "No hit recorded";
 
 renderLegend();
 tickClock();
@@ -58,6 +64,7 @@ function connect() {
 }
 
 function render(snapshot) {
+  updateHitVisualization(snapshot);
   updateStatus(snapshot);
   drawRadar(snapshot.tracking);
   drawGraphs(snapshot.history || []);
@@ -79,6 +86,8 @@ function updateStatus(snapshot) {
   const latency = numberOr(latest.latency_ms, null);
   const lockState = displayState(tracking, laser);
   const bboxSize = bboxAreaRatio(tracking);
+  const hitActive = isHitFlashActive() || Boolean(laser.hit_detected);
+  const hitCount = snapshot.hit_count ?? latest.hit_count ?? 0;
 
   const meters = [
     statusMeter("Drone Battery", tello.battery, 0, 100, "%", "#f0c84b"),
@@ -102,8 +111,8 @@ function updateStatus(snapshot) {
 
   const stats = [
     keyStat("Lock-on", lockState, stateClass(lockState)),
-    keyStat("Laser", laser.armed ? "ON" : "OFF", laser.armed ? "danger" : "muted"),
-    keyStat("Hits", snapshot.hit_count ?? latest.hit_count ?? 0, "success"),
+    keyStat("Laser", laser.hit_detected ? "HIT" : laser.armed ? "ON" : "OFF", hitActive ? "danger hit-pulse" : laser.armed ? "danger" : "muted"),
+    keyStat("Hits", hitCount, hitActive ? "danger hit-pulse" : "success"),
     keyStat("Shots", snapshot.shot_count ?? latest.shot_count ?? 0, "warn"),
     keyStat("Error", formatValue(trackingError, " px"), trackingError !== null && trackingError <= 80 ? "success" : "warn"),
     keyStat("Latency", formatValue(latency, " ms"), latency !== null && latency <= 120 ? "success" : "warn"),
@@ -133,7 +142,7 @@ function drawRadar(tracking) {
 
   drawRadarGrid(cx, cy, radius);
   drawFov(cx, cy, radius, tracking);
-  drawRadarCenter(cx, cy);
+  drawRadarCenter(cx, cy, isHitFlashActive() || Boolean(tracking && tracking.laser && tracking.laser.hit_detected));
 
   if (!tracking) {
     radarReadout.textContent = "Motor - | FOV 110 deg | Bearing only";
@@ -149,7 +158,7 @@ function drawRadar(tracking) {
     drawAudioBearing(audio.direction_deg, audio.confidence, radius);
   }
   if (typeof motorDirection === "number") {
-    drawMotorMarker(motorDirection, lockState, radius * MOTOR_RING_SCALE);
+    drawMotorMarker(motorDirection, lockState, radius * MOTOR_RING_SCALE, tracking && tracking.laser && tracking.laser.hit_detected);
   }
 
   radarReadout.textContent = `Motor ${formatDegrees(motorDirection)} | FOV ${CAMERA_FOV_DEG} deg | Bearing only | Audio ${showAudioBearing ? formatDegrees(audio.direction_deg) : "-"}`;
@@ -230,12 +239,13 @@ function drawAudioBearing(degrees, confidence, radius) {
   radarCtx.restore();
 }
 
-function drawMotorMarker(degrees, lockState, length) {
+function drawMotorMarker(degrees, lockState, length, laserHit = false) {
   const cx = radar.width / 2;
   const cy = radar.height / 2;
   const point = directionPoint(cx, cy, degrees, length);
-  const locked = lockState === "LOCKED" || lockState === "FIRING";
-  const color = locked ? "#ff5f5f" : "#f0c84b";
+  const activeHit = laserHit || isHitFlashActive();
+  const locked = lockState === "LOCKED" || lockState === "FIRING" || activeHit;
+  const color = activeHit ? "#ff3b3b" : locked ? "#ff5f5f" : "#f0c84b";
 
   radarCtx.fillStyle = color;
   radarCtx.strokeStyle = color;
@@ -249,11 +259,20 @@ function drawMotorMarker(degrees, lockState, length) {
   radarCtx.fill();
 
   if (locked) {
-    const pulse = 10 + (Date.now() % 1000) / 100;
-    radarCtx.strokeStyle = "rgba(255, 95, 95, 0.75)";
+    const pulse = activeHit ? 16 + (Date.now() % 700) / 18 : 10 + (Date.now() % 1000) / 100;
+    radarCtx.strokeStyle = activeHit ? "rgba(255, 59, 59, 0.92)" : "rgba(255, 95, 95, 0.75)";
+    radarCtx.lineWidth = activeHit ? 4 : 2;
     radarCtx.beginPath();
     radarCtx.arc(point.x, point.y, pulse, 0, Math.PI * 2);
     radarCtx.stroke();
+
+    if (activeHit) {
+      radarCtx.font = "bold 16px system-ui";
+      radarCtx.textAlign = "center";
+      radarCtx.fillStyle = "#ffb2a8";
+      radarCtx.fillText("HIT", point.x, Math.max(20, point.y - pulse - 10));
+      radarCtx.textAlign = "start";
+    }
   }
 }
 
@@ -269,11 +288,19 @@ function bearingToCanvasRadians(degrees) {
   return (270 - normalizeDegrees(degrees)) * (Math.PI / 180);
 }
 
-function drawRadarCenter(cx, cy) {
-  radarCtx.fillStyle = "#eef3f6";
+function drawRadarCenter(cx, cy, activeHit = false) {
+  radarCtx.fillStyle = activeHit ? "#ff3b3b" : "#eef3f6";
   radarCtx.beginPath();
-  radarCtx.arc(cx, cy, 4, 0, Math.PI * 2);
+  radarCtx.arc(cx, cy, activeHit ? 6 : 4, 0, Math.PI * 2);
   radarCtx.fill();
+  if (activeHit) {
+    const pulse = 22 + (Date.now() % 650) / 10;
+    radarCtx.strokeStyle = "rgba(255, 59, 59, 0.55)";
+    radarCtx.lineWidth = 3;
+    radarCtx.beginPath();
+    radarCtx.arc(cx, cy, pulse, 0, Math.PI * 2);
+    radarCtx.stroke();
+  }
 }
 
 function drawCompassLabels(cx, cy, radius) {
@@ -346,9 +373,67 @@ function drawEvents(items) {
       const ts = new Date(item.timestamp * 1000).toLocaleTimeString();
       const category = eventCategory(item.message);
       const fresh = index === 0 ? " fresh" : "";
-      return `<div class="event ${item.level} ${category}${fresh}"><span>${ts}</span><span>${category}</span><span>${item.message}</span></div>`;
+      const hit = isHitEvent(item) ? " hit-event" : "";
+      return `<div class="event ${item.level} ${category}${fresh}${hit}"><span>${ts}</span><span>${category}</span><span>${item.message}</span></div>`;
     })
     .join("");
+}
+
+function updateHitVisualization(snapshot) {
+  const tracking = snapshot.tracking || {};
+  const laser = tracking.laser || {};
+  const latest = latestHistorySample(snapshot);
+  const hitCount = snapshot.hit_count ?? latest.hit_count ?? 0;
+  const laserHit = Boolean(laser.hit_detected);
+  const countIncreased = lastHitCount !== null && hitCount > lastHitCount;
+  const laserRising = laserHit && !lastLaserHit;
+
+  if (countIncreased || laserRising) {
+    triggerHitFlash(snapshot, tracking, hitCount);
+  }
+
+  lastHitCount = hitCount;
+  lastLaserHit = laserHit;
+  renderHitOverlay();
+}
+
+function triggerHitFlash(snapshot, tracking, hitCount) {
+  hitFlashUntil = Date.now() + 2600;
+  lastHitDetail = hitDetail(snapshot, tracking, hitCount);
+  renderHitOverlay();
+}
+
+function renderHitOverlay() {
+  if (!hitOverlay) {
+    return;
+  }
+  const active = isHitFlashActive();
+  hitOverlay.classList.toggle("active", active);
+  if (hitOverlayDetail) {
+    hitOverlayDetail.textContent = lastHitDetail;
+  }
+}
+
+function isHitFlashActive() {
+  return Date.now() < hitFlashUntil;
+}
+
+function hitDetail(snapshot, tracking, hitCount) {
+  const parts = [];
+  parts.push(`Hits ${hitCount}`);
+  if (tracking.state) {
+    parts.push(String(tracking.state).toUpperCase());
+  }
+  if (typeof tracking.confidence === "number") {
+    parts.push(`conf ${tracking.confidence.toFixed(2)}`);
+  }
+  if (tracking.error && typeof tracking.error.x_px === "number" && typeof tracking.error.y_px === "number") {
+    parts.push(`err ${Math.hypot(tracking.error.x_px, tracking.error.y_px).toFixed(0)} px`);
+  }
+  if (typeof tracking.frame_id === "number") {
+    parts.push(`frame ${tracking.frame_id}`);
+  }
+  return parts.join(" | ");
 }
 
 function renderLegend() {
@@ -461,7 +546,8 @@ function stateClass(state) {
 }
 
 function stateStepActive(step, state) {
-  const normalized = state === "SEARCHING" ? "SEARCH" : state === "TRACKING" ? "TRACK" : state === "LOCKED" ? "LOCK" : state;
+  const normalized =
+    state === "SEARCHING" ? "SEARCH" : state === "TRACKING" ? "TRACK" : state === "LOCKED" ? "LOCK" : state === "FIRING" ? "FIRE" : state;
   return step === normalized;
 }
 
@@ -541,9 +627,15 @@ function eventCategory(message) {
   return "SYSTEM";
 }
 
+function isHitEvent(item) {
+  const text = String((item && item.message) || "").toUpperCase();
+  return text.includes("HIT");
+}
+
 function tickClock() {
   const clock = new Date().toLocaleTimeString();
   liveClock.textContent = `LIVE ${clock}`;
+  renderHitOverlay();
   if (lastSnapshot) {
     drawRadar(lastSnapshot.tracking);
   }
