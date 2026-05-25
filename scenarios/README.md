@@ -30,3 +30,15 @@ Demo path at manually set 80-100cm altitude:
 10. wait 3 seconds
 
 Set the altitude manually before running this scenario.
+
+## 4 - `4_stage_demo_forward_side_climb`
+
+Stage demo path:
+
+1. up 50cm
+2. forward 200cm
+3. left 200cm
+4. right 200cm
+5. up 100cm
+6. hover until Jetson sends `laser.hit_detected=true`
+7. auto hit response lands the drone

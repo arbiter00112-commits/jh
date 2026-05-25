@@ -117,9 +117,13 @@ dt {
   border: 1px solid var(--line);
   border-radius: 6px;
   font-weight: 700;
-  min-width: 150px;
+  min-width: 118px;
   padding: 8px 12px;
   text-align: center;
+}
+
+.badge.tello {
+  min-width: 96px;
 }
 
 .live-clock {
@@ -331,6 +335,16 @@ canvas {
   background: rgba(255, 95, 95, 0.12);
   border-color: rgba(255, 95, 95, 0.42);
   box-shadow: inset 0 0 0 1px rgba(255, 95, 95, 0.08);
+}
+
+.key-stat.warn strong {
+  color: var(--yellow);
+}
+
+.key-stat.warn {
+  background: rgba(240, 200, 75, 0.12);
+  border-color: rgba(240, 200, 75, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(240, 200, 75, 0.08);
 }
 
 .key-stat.hit-pulse {

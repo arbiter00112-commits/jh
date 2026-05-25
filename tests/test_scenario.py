@@ -9,7 +9,8 @@ from pathlib import Path
 from tello_control.cli import resolve_scenario_path, scenario_selection_message
 from tello_control.controller import DroneController, DroneError
 from tello_control.dry_run import DryRunTello
-from tello_control.scenario import execute_scenario, load_scenario
+from tello_control.scenario import execute_scenario, execute_step, load_scenario
+from tello_control.scenario import ScenarioStep
 
 
 class ScenarioTest(unittest.TestCase):
@@ -17,6 +18,7 @@ class ScenarioTest(unittest.TestCase):
         self.assertEqual(resolve_scenario_path("1"), Path("scenarios/1.json"))
         self.assertEqual(resolve_scenario_path("2"), Path("scenarios/2.json"))
         self.assertEqual(resolve_scenario_path("3"), Path("scenarios/3.json"))
+        self.assertEqual(resolve_scenario_path("4"), Path("scenarios/4.json"))
 
     def test_scenario_selection_message_uses_json_descriptions(self) -> None:
         message = scenario_selection_message()
@@ -24,6 +26,7 @@ class ScenarioTest(unittest.TestCase):
         self.assertIn("1: 1_rc_front_view_infinity", message)
         self.assertIn("2: 2_front_view_corner_pause", message)
         self.assertIn("3: 3_demo_rectangle_center_return", message)
+        self.assertIn("4: 4_stage_demo_forward_side_climb", message)
         self.assertIn("Esc/q: cancel", message)
 
     def test_default_scenario_keeps_forward_back_axis_zero(self) -> None:
@@ -142,6 +145,31 @@ class ScenarioTest(unittest.TestCase):
         self.assertEqual([step.command for step in movement], ["right", "forward", "left", "back", "right"])
         self.assertEqual([step.params["cm"] for step in movement], [50, 50, 100, 50, 50])
         self.assertEqual([step.params["seconds"] for step in waits], [1.0, 1.0, 1.0, 1.0, 3.0])
+
+    def test_scenario_four_matches_stage_demo_path(self) -> None:
+        scenario = load_scenario("scenarios/4.json")
+
+        self.assertEqual(scenario.name, "4_stage_demo_forward_side_climb")
+        self.assertEqual(
+            [(step.command, step.params) for step in scenario.steps],
+            [
+                ("up", {"cm": 50}),
+                ("forward", {"cm": 200}),
+                ("left", {"cm": 200}),
+                ("right", {"cm": 200}),
+                ("up", {"cm": 100}),
+                ("wait_until_stop", {"reason": "hit_detected"}),
+            ],
+        )
+
+    def test_wait_until_stop_requires_stop_event(self) -> None:
+        tello = DryRunTello()
+        controller = DroneController(tello)
+        controller.connect()
+        controller.takeoff()
+
+        with self.assertRaisesRegex(DroneError, "requires a stop event"):
+            execute_step(controller, ScenarioStep("wait_until_stop", {}))
 
     def test_rejects_tiny_go_step(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -15,4 +15,6 @@ exec "$PYTHON" -m tello_control.cli \
   --dashboard-port "${DASHBOARD_PORT:-8000}" \
   --telemetry-host "${TELEMETRY_HOST:-0.0.0.0}" \
   --telemetry-port "${TELEMETRY_PORT:-5005}" \
+  --open-browser \
+  --browser-display "${BROWSER_DISPLAY:-:0}" \
   "$@"

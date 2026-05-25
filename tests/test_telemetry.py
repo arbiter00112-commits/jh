@@ -10,9 +10,10 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from tello_control.dashboard import DashboardServer, dashboard_urls
+from tello_control.dashboard import DashboardServer, dashboard_urls, print_network_help
 from tello_control.dry_run import DryRunTello
 from tello_control.logger import TelemetryLogger
+from tello_control.network_profiles import SITE_NETWORK_PROFILES, format_site_network_profiles
 from tello_control.telemetry_model import ErrorData, JetsonTrackingData, LaserData
 from tello_control.telemetry_receiver import FakeJetsonTelemetry, TelemetryReceiver, parse_tracking_packet
 from tello_control.telemetry_store import TelemetryStore
@@ -290,6 +291,24 @@ class DashboardNetworkHelpTest(unittest.TestCase):
                     "http://10.69.62.209:8000",
                 ],
             )
+
+    def test_site_network_profiles_include_known_static_iptime_settings(self) -> None:
+        self.assertEqual(SITE_NETWORK_PROFILES[0].name, "220호")
+        self.assertEqual(SITE_NETWORK_PROFILES[0].ip_address, "113.198.84.249")
+        self.assertEqual(SITE_NETWORK_PROFILES[0].secondary_dns, "209.248.252.2")
+        self.assertEqual(SITE_NETWORK_PROFILES[1].name, "시현장")
+        self.assertEqual(SITE_NETWORK_PROFILES[1].gateway, "223.194.146.254")
+        self.assertEqual(SITE_NETWORK_PROFILES[1].secondary_dns, "203.248.252.2")
+
+    def test_print_network_help_includes_site_network_profiles(self) -> None:
+        with patch("tello_control.dashboard.local_ipv4_addresses", return_value=[]):
+            with patch("builtins.print") as mock_print:
+                print_network_help("0.0.0.0", 8000, 5005)
+
+        output = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("Known ipTIME static WAN profiles:", output)
+        for line in format_site_network_profiles():
+            self.assertIn(line, output)
 
 
 class LoggerTest(unittest.TestCase):

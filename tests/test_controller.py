@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from tello_control.cli import build_parser, command_label, handle_hit_response, handle_key
+from tello_control.cli import BatteryPoller, build_parser, command_label, handle_hit_response, handle_key
 from tello_control.controller import DroneController, DroneError
 from tello_control.rc_control import RCControlLoop
 from tello_control.rc_control import RCControlState
 from tello_control.safety import SafetyConfig
+from tello_control.telemetry_store import TelemetryStore
 
 
 class FakeTello:
@@ -86,11 +87,15 @@ class ConnectFailTello(FakeTello):
 
 
 class DummyScenarioRunner:
-    def is_running(self) -> bool:
-        return False
+    def __init__(self, running: bool = False) -> None:
+        self.running = running
+        self.requested_resume_rc: bool | None = None
 
-    def request_stop(self) -> None:
-        return None
+    def is_running(self) -> bool:
+        return self.running
+
+    def request_stop(self, *, resume_rc: bool = True) -> None:
+        self.requested_resume_rc = resume_rc
 
 
 class DroneControllerTest(unittest.TestCase):
@@ -100,6 +105,8 @@ class DroneControllerTest(unittest.TestCase):
         self.assertTrue(parser.parse_args([]).auto_hit_response)
         self.assertFalse(parser.parse_args(["--no-auto-hit-response"]).auto_hit_response)
         self.assertTrue(parser.parse_args(["--auto-hit-response"]).auto_hit_response)
+        self.assertEqual(parser.parse_args([]).hit_response, "flip-land")
+        self.assertEqual(parser.parse_args(["--hit-response", "free-fall"]).hit_response, "free-fall")
 
     def test_connect_checks_battery_and_sets_speed(self) -> None:
         fake = FakeTello(battery=70)
@@ -137,6 +144,21 @@ class DroneControllerTest(unittest.TestCase):
 
         self.assertFalse(controller.connected)
         self.assertEqual(fake.calls, [("connect", None)])
+
+    def test_battery_poller_refreshes_controller_and_store(self) -> None:
+        fake = FakeTello(battery=80)
+        controller = DroneController(fake)
+        store = TelemetryStore()
+
+        controller.connect()
+        store.update_tello(connected=True, airborne=False, battery=80, speed=20)
+        fake.battery = 75
+
+        refreshed = BatteryPoller(controller, store).poll_once()
+
+        self.assertEqual(refreshed, 75)
+        self.assertEqual(controller.battery, 75)
+        self.assertEqual(store.snapshot().tello.battery, 75)
 
     def test_movement_requires_takeoff(self) -> None:
         fake = FakeTello()
@@ -219,6 +241,46 @@ class DroneControllerTest(unittest.TestCase):
 
         self.assertIn(("flip_forward", None), fake.calls)
         self.assertEqual(fake.calls[-1], ("land", None))
+        self.assertFalse(controller.airborne)
+
+    def test_hit_response_free_fall_uses_emergency_and_ends_connection(self) -> None:
+        fake = FakeTello(battery=80)
+        controller = DroneController(fake, SafetyConfig(min_flip_battery=50))
+        rc_state = RCControlState()
+        rc_loop = RCControlLoop(controller, rc_state)
+        scenario_runner = DummyScenarioRunner()
+
+        controller.connect()
+        controller.takeoff()
+        handle_hit_response(
+            controller,
+            rc_state,
+            rc_loop,
+            scenario_runner,
+            None,
+            None,
+            action="free-fall",
+        )
+
+        self.assertIn(("emergency", None), fake.calls)
+        self.assertNotIn(("flip_forward", None), fake.calls)
+        self.assertNotIn(("land", None), fake.calls)
+        self.assertEqual(fake.calls[-1], ("end", None))
+        self.assertFalse(controller.airborne)
+        self.assertFalse(controller.connected)
+
+    def test_hit_response_stops_running_scenario_without_resuming_rc(self) -> None:
+        fake = FakeTello(battery=80)
+        controller = DroneController(fake, SafetyConfig(min_flip_battery=50))
+        rc_state = RCControlState()
+        rc_loop = RCControlLoop(controller, rc_state)
+        scenario_runner = DummyScenarioRunner(running=True)
+
+        controller.connect()
+        controller.takeoff()
+        handle_hit_response(controller, rc_state, rc_loop, scenario_runner, None, None)
+
+        self.assertFalse(scenario_runner.requested_resume_rc)
         self.assertFalse(controller.airborne)
 
     def test_cli_maps_number_keys_to_flips(self) -> None:

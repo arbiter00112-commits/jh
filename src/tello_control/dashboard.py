@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .logger import TelemetryLogger
+from .network_profiles import format_site_network_profiles
 from .telemetry_receiver import FakeJetsonTelemetry, TelemetryReceiver
 from .telemetry_store import TelemetryStore
 
@@ -34,6 +35,9 @@ def create_app(store: TelemetryStore) -> Any:
     from fastapi.staticfiles import StaticFiles
 
     web_dir = Path(__file__).with_name("web")
+    ws_interval = max(0.02, float(os.getenv("DASHBOARD_WS_INTERVAL_SEC", "0.033")))
+    ws_history = max(20, int(os.getenv("DASHBOARD_WS_HISTORY", "160")))
+    ws_events = max(12, int(os.getenv("DASHBOARD_WS_EVENTS", "60")))
     app = FastAPI(title="Tello Dashboard")
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
 
@@ -50,8 +54,11 @@ def create_app(store: TelemetryStore) -> Any:
         await websocket.accept()
         try:
             while True:
-                await websocket.send_json(store.snapshot().to_dict())
-                await asyncio.sleep(0.1)
+                payload = store.snapshot().to_dict()
+                payload["history"] = payload.get("history", [])[-ws_history:]
+                payload["events"] = payload.get("events", [])[-ws_events:]
+                await websocket.send_json(payload)
+                await asyncio.sleep(ws_interval)
         except WebSocketDisconnect:
             return
 
@@ -194,6 +201,11 @@ def print_network_help(dashboard_host: str, dashboard_port: int, telemetry_port:
             print(f"  {address}:{telemetry_port}")
     else:
         print(f"Jetson UDP target: <this-device-ip>:{telemetry_port}")
+
+    print("Known ipTIME static WAN profiles:")
+    for line in format_site_network_profiles():
+        print(line)
+    print("After moving sites, reset ipTIME and enter the matching profile in ipTIME setup assistant.")
 
 
 def open_dashboard_browser(host: str, port: int, delay: float = 0.8, display: str = ":0") -> None:

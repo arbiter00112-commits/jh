@@ -53,8 +53,10 @@ Hits 3 | LOCKED | conf 0.82 | err 41 px | frame 1234
 
 | 표시명 | 의미 | 데이터 출처 / 계산 |
 | --- | --- | --- |
-| `Lock-on` | 현재 추적 단계 요약 | `displayState(tracking, laser)` |
-| `Laser` | 레이저 상태 | `hit_detected=true`이면 `HIT`, 아니면 `armed=true`이면 `ON`, 그 외 `OFF` |
+| `Vision` | 비전 타겟 상태 | `target_found`, `tracking.state` -> `NO TARGET`, `SCANNING`, `DETECTED`, `TRACKING`, `LOCKED` |
+| `Audio Assist` | 오디오 보조 탐색 상태 | `audio.fallback_active`, `audio.drone_detected`, `audio.sector`, `audio.target_motor_deg`, `audio.status` |
+| `Fire Result` | 발사/피격 판정 상태 | `laser.fire.result`, `laser.fired`, `laser.fire.active`, `laser.hit_detected` |
+| `Laser Output` | 레이저 출력 상태 | `hit_detected=true`이면 `HIT`, 아니면 `armed=true`이면 `ON`, 그 외 `OFF` |
 | `Hits` | 실제 명중 횟수 | `snapshot.hit_count`, fallback `latest.history.hit_count`, 기본 `0` |
 | `Shots` | Jetson fire 입력/발사 시도 횟수 | `snapshot.shot_count`, fallback `latest.history.shot_count`, 기본 `0` |
 | `Error` | 현재 tracking error 크기 | `history.tracking_error_px` 또는 `sqrt(error.x_px^2 + error.y_px^2)` |
@@ -62,8 +64,10 @@ Hits 3 | LOCKED | conf 0.82 | err 41 px | frame 1234
 
 색상/강조 기준:
 
-- `Laser`, `Hits`: hit flash 중이거나 `laser.hit_detected=true`이면 danger/pulse
-- `Laser`: `laser.armed=true`이면 danger
+- `Laser Output`, `Hits`: hit flash 중이거나 `laser.hit_detected=true`이면 danger/pulse
+- `Laser Output`: `laser.armed=true`이면 danger. 현재 payload에서 `armed`는 무장 가능 여부가 아니라 laser output active 의미
+- `Audio Assist`: `fallback_active=true`이면 warn 강조
+- `Fire Result`: `HIT`이면 danger/pulse, `ACTIVE` 또는 `MISS`이면 warn
 - `Error`: `80 px` 이하이면 success, 그 외 warn
 - `Latency`: `120 ms` 이하이면 success, 그 외 warn
 
@@ -81,7 +85,7 @@ IDLE -> SEARCH -> TRACK -> LOCK -> FIRE
 
 | 표시 상태 | 조건 |
 | --- | --- |
-| `FIRING` | `laser.hit_detected`, `laser.armed`, 또는 raw state에 `FIR` 포함 |
+| `FIRING` | `laser.hit_detected`, `laser.fired`, `laser.fire.active`, 또는 raw state에 `FIR` 포함 |
 | `LOCKED` | raw state에 `LOCK` 포함 |
 | `TRACKING` | raw state에 `TRACK` 또는 `DETECT` 포함 |
 | `SEARCHING` | raw state에 `SEARCH`, `SCAN`, 또는 `LOST` 포함 |
@@ -96,9 +100,9 @@ IDLE -> SEARCH -> TRACK -> LOCK -> FIRE
 | `Drone Battery` | `0-100%` | `snapshot.tello.battery` |
 | `YOLO Confidence` | `0-1` | `tracking.confidence`, fallback latest history `confidence` |
 | `Audio Confidence` | `0-1` | `tracking.audio.confidence`, fallback latest history `audio_confidence` |
-| `Signal Quality` | `0-100%` | `100 - last_received_age * 50`, `0-100`으로 clamp |
+| `Telemetry Freshness` | `0-100%` | `100 - last_received_age * 50`, `0-100`으로 clamp. 표시는 `<sec>s ago` |
 
-`Signal Quality`는 Jetson telemetry가 최근에 들어왔는지를 보여주는 단순 품질 지표입니다. `last_received_age`가 없으면 `0%`입니다.
+`Telemetry Freshness`는 Jetson telemetry가 최근에 들어왔는지를 보여주는 단순 freshness 지표입니다. `last_received_age`가 없으면 `0%`입니다.
 
 ### Detail Rows
 
@@ -110,11 +114,15 @@ IDLE -> SEARCH -> TRACK -> LOCK -> FIRE
 | `Airborne` | 이륙 상태 | `snapshot.tello.airborne` -> `yes/no/-` |
 | `Speed mode` | Tello speed 설정 | `snapshot.tello.speed` + `cm/s` |
 | `Last command` | 마지막 조종 명령 | `snapshot.tello.last_command` |
-| `Jetson status` | Jetson telemetry 상태 | `snapshot.jetson_status` |
+| `Jetson telemetry` | Jetson telemetry 수신 상태 | `snapshot.jetson_status`와 `snapshot.last_received_age` |
+| `Jetson state` | Jetson raw state | `tracking.state` |
 | `Telemetry rate` | 최근 1초 telemetry 수신 개수 | latest history `telemetry_rate_hz` + `Hz` |
 | `Last received` | 마지막 telemetry 이후 경과 시간 | `snapshot.last_received_age` + `sec` |
-| `Motor angle` | 모터/팬 방향 | `motorDirectionDeg(tracking)` |
-| `Audio bearing` | 오디오 방향 | `tracking.audio.direction_deg` |
+| `Motor heading` | 모터/팬 방향 | `motorDirectionDeg(tracking)` |
+| `Audio target` | 오디오 fallback 목표 모터각 | `tracking.audio.target_motor_deg` |
+| `Audio alignment` | 오디오 목표각과 실제 모터각 차이 | `audio.target_motor_deg - ultra_ps.motor_deg`를 `-180..180`으로 정규화 |
+| `Audio status` | 오디오 보조 탐색 상태 상세 | `audio.status` 또는 fallback detail |
+| `Fire result` | 발사 결과 상세 | `laser.fire.result` |
 | `Target size` | bbox가 frame에서 차지하는 면적 비율 | `(bbox.w * bbox.h) / (frame.width * frame.height)` |
 
 ## Motor-Centered Radar
@@ -134,8 +142,8 @@ IDLE -> SEARCH -> TRACK -> LOCK -> FIRE
   - `S 180`
   - `E 270`
 - 카메라 FOV wedge
-  - 고정 FOV: `110 deg`
-  - 반각: `55 deg`
+  - 고정 FOV: `90 deg`
+  - 반각: `45 deg`
   - 중심: motor direction
 - 중심점
   - hit 중이면 빨간색 pulse
@@ -144,8 +152,10 @@ IDLE -> SEARCH -> TRACK -> LOCK -> FIRE
   - locked/firing/hit 상태면 pulse 표시
   - hit 중이면 marker 근처에 `HIT` 텍스트 표시
 - audio bearing
-  - `Lock-on` 표시 상태가 `SEARCHING`일 때만 표시
-  - `tracking.audio.direction_deg` 방향으로 화살표 표시
+  - `tracking.audio.fallback_active=true`이면 Audio Assist active 상태로 강조
+  - 비전이 bbox를 다시 얻으면 `fallback_active=false`가 되어 오디오 정보는 숨김
+  - `tracking.audio.sector`와 `tracking.audio.target_motor_deg`를 표시
+  - `target_motor_deg`는 `ultra_ps.motor_deg`와 같은 compass 좌표계여야 하며, 오디오 fallback 중 모터 heading이 이 값에 수렴해야 함
   - `tracking.audio.confidence`가 높을수록 더 진하고 두껍게 표시
 
 ### Radar Readout
@@ -155,32 +165,38 @@ IDLE -> SEARCH -> TRACK -> LOCK -> FIRE
 tracking이 없을 때:
 
 ```text
-Motor - | FOV 110 deg | Bearing only
+Motor - | FOV 90 deg | Bearing only
 ```
 
 tracking이 있을 때:
 
 ```text
-Motor <deg> | FOV 110 deg | Bearing only | Audio <deg or ->
+Motor heading <deg> | FOV 90 deg | Audio target <deg or ->
 ```
+
+레이더 내부에는 오디오 fallback 중에만 `Audio search target` 안내 문구를 표시합니다.
 
 ### Motor Direction 계산
 
 `motorDirectionDeg(tracking)`은 아래 우선순위로 방향값을 고릅니다.
 
-1. `tracking.ultra_ps.motor_deg`
-2. `motor_deg`가 없으면 `tracking.ultra_ps.front_pan`과 `tracking.ultra_ps.pan_tick`으로 fallback 계산
-3. `tracking.ultra_ps.motor_direction_deg`
-4. `tracking.ultra_ps.fan_deg`
-5. `tracking.ultra_ps.heading_deg`
-6. `tracking.ultra_ps.direction_deg`
-7. `tracking.ptz.pan_deg`
+1. `tracking.ultra_ps.pan_tick` 또는 `tracking.ptz.pan_cmd`를 360도식으로 계산
+2. `tracking.ultra_ps.motor_deg`
+3. `tracking.ptz.pan_deg`
 
-`motor_deg`는 Jetson이 계산해서 보내는 최종 표시 각도이므로 Pi 대시보드는 그대로 표시합니다. tick fallback 계산식은 다음과 같습니다.
+현재 Jetson payload의 `ultra_ps`에는 `motor_deg`만 들어옵니다. `front_pan`, `pan_tick`, `motor_direction_deg`, `fan_deg`, `heading_deg`, `direction_deg`는 Pi UI가 의존하지 않습니다.
+
+`motor_deg`는 Jetson이 계산해서 보내는 최종 표시 각도이므로 Pi 대시보드는 그대로 표시합니다. Jetson은 pan tick 전체 범위를 360도 wrap으로 해석해야 합니다.
 
 ```text
-motor_deg = ((front_pan - pan_tick) * 360 / 4096) % 360
+motor_deg = ((front_pan - pan_tick) * 360 / 4096 * PAN_DIR) % 360
 ```
+
+기본 `front_pan=2048`, `PAN_DIR=1` 기준 `2048=0 deg`, `1024=90 deg`, `0=180 deg`, `3072=270 deg`입니다.
+
+현재 Pi UI도 `ptz.pan_cmd`가 있으면 이를 present pan tick으로 보고 같은 식으로 우선 계산합니다. `front_pan`이 payload에 없으면 기본 `2048`을 사용합니다.
+
+단, `target_found=false` 상태에서 `ptz.pan_cmd`가 기본 center tick(`2048` 근처)으로 들어오고 직전 유효 모터각이 있으면, UI는 이를 fallback 초기값으로 보고 마지막 유효 모터각을 유지합니다. 타겟을 잃었을 때 실제 모터는 90도 근처인데 대시보드만 0도로 튀는 현상을 막기 위한 방어 로직입니다.
 
 ## Live Graphs
 
@@ -224,7 +240,7 @@ motor_deg = ((front_pan - pan_tick) * 360 / 4096) % 360
 
 ## Snapshot 데이터 출처
 
-대시보드는 서버가 보내는 `DashboardSnapshot.to_dict()` 결과를 사용합니다.
+대시보드는 서버가 보내는 `DashboardSnapshot.to_dict()` 결과를 사용합니다. WebSocket 경로는 반응 속도를 위해 `history`와 `events`를 최신 꼬리만 잘라 보냅니다. 기본 WebSocket 반영 주기는 약 30Hz입니다.
 
 주요 필드:
 
@@ -260,19 +276,43 @@ motor_deg = ((front_pan - pan_tick) * 360 / 4096) % 360
       "y_px": -60
     },
     "audio": {
-      "direction_deg": 35.0,
-      "confidence": 0.62
+      "enabled": true,
+      "drone_detected": true,
+      "sector": "FRONT_LEFT",
+      "sector_index": 1,
+      "sector_count": 6,
+      "target_motor_deg": 60.0,
+      "confidence": 0.62,
+      "detected": true,
+      "fallback_active": false,
+      "status": "VISION_HOLD"
     },
     "ultra_ps": {
-      "motor_deg": 90.0,
-      "front_pan": 2048,
-      "pan_tick": 1024
+      "motor_deg": 90.0
     },
     "laser": {
       "armed": true,
       "fired": false,
       "shot_count": 7,
-      "hit_detected": false
+      "hit_detected": false,
+      "dot": {
+        "detected": false,
+        "x": null,
+        "y": null,
+        "score": 0.0,
+        "area": 0,
+        "inside_bbox": false,
+        "hit_count": 0,
+        "hit_window": 5
+      },
+      "fire": {
+        "active": false,
+        "result": "idle",
+        "id": 7,
+        "hit_frames": 0,
+        "sample_frames": 0,
+        "window_sec": 1.0
+      }
     }
   },
   "history": [],

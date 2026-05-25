@@ -20,6 +20,11 @@ from .telemetry_receiver import FakeJetsonTelemetry, TelemetryReceiver
 from .telemetry_store import TelemetryStore
 
 
+BATTERY_REFRESH_SECONDS = 5.0
+HIT_RESPONSE_FLIP_LAND = "flip-land"
+HIT_RESPONSE_FREE_FALL = "free-fall"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Conservative keyboard control for DJI Tello.")
     parser.add_argument("--min-battery", type=int, default=25, help="Minimum battery percent.")
@@ -64,13 +69,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-hit-response",
         dest="auto_hit_response",
         action="store_true",
-        help="Trigger flip-and-land when Jetson telemetry reports laser hit_detected. Enabled by default.",
+        help="Trigger the selected hit response when Jetson telemetry reports laser hit_detected. Enabled by default.",
     )
     parser.add_argument(
         "--no-auto-hit-response",
         dest="auto_hit_response",
         action="store_false",
-        help="Disable flip-and-land on Jetson laser hit_detected telemetry.",
+        help="Disable automatic response to Jetson laser hit_detected telemetry.",
+    )
+    parser.add_argument(
+        "--hit-response",
+        choices=(HIT_RESPONSE_FLIP_LAND, HIT_RESPONSE_FREE_FALL),
+        default=HIT_RESPONSE_FLIP_LAND,
+        help="Action when Jetson laser hit_detected telemetry is received.",
     )
     return parser
 
@@ -119,7 +130,9 @@ def run_cli(
 
     rc_state = RCControlState(hold_seconds=rc_hold_seconds)
     rc_loop = RCControlLoop(controller, rc_state, rate_hz=rc_rate_hz)
+    battery_poller = BatteryPoller(controller, store)
     rc_loop.start()
+    battery_poller.start()
     ui = None
     use_control_ui = control_ui and sys.stdin.isatty() and sys.stdout.isatty()
     scenario_runner = ScenarioRunner(
@@ -205,6 +218,7 @@ def run_cli(
                     record_event(store, logger, "Ignored command", str(exc), level="WARN")
                     notify(ui, f"Ignored: {exc}", level="WARN")
     finally:
+        battery_poller.stop()
         scenario_runner.request_stop()
         scenario_runner.join(timeout=3.0)
         rc_state.stop_motion()
@@ -315,11 +329,12 @@ def choose_scenario(ui: object | None) -> FlightScenario | None:
     except DroneError as exc:
         notify(ui, f"Scenario load failed: {exc}", level="WARN")
         return None
-    notify(ui, f"Selected scenario {key}: {scenario.name}. Starting.")
+    detail = f"{scenario.name} - {scenario.description}" if scenario.description else scenario.name
+    notify(ui, f"Selected scenario {key}: {detail}. Starting.")
     return scenario
 
 
-def scenario_selection_message(ids: tuple[str, ...] = ("1", "2", "3")) -> str:
+def scenario_selection_message(ids: tuple[str, ...] = ("1", "2", "3", "4")) -> str:
     lines = ["Select scenario number:"]
     for scenario_id in ids:
         try:
@@ -352,6 +367,7 @@ class ScenarioRunner:
         self.ui = ui
         self._stop_event = threading.Event()
         self._land_requested = threading.Event()
+        self._resume_rc_after_stop = True
         self._thread: threading.Thread | None = None
 
     def is_running(self) -> bool:
@@ -367,10 +383,12 @@ class ScenarioRunner:
         self.scenario = scenario
         self._stop_event.clear()
         self._land_requested.clear()
+        self._resume_rc_after_stop = True
         self._thread = threading.Thread(target=self._run, name="scenario-runner", daemon=True)
         self._thread.start()
 
-    def request_stop(self) -> None:
+    def request_stop(self, *, resume_rc: bool = True) -> None:
+        self._resume_rc_after_stop = resume_rc
         self._stop_event.set()
 
     def request_land(self) -> None:
@@ -387,7 +405,10 @@ class ScenarioRunner:
         loops = scenario.loops if self.scenario_loops is None else self.scenario_loops
         self.rc_state.stop_motion()
         self.rc_loop.stop()
-        record_event(self.store, self.logger, "Scenario start", f"{scenario.name} loops={loops}")
+        detail = f"{scenario.name} loops={loops}"
+        if scenario.description:
+            detail = f"{detail} - {scenario.description}"
+        record_event(self.store, self.logger, "Scenario start", detail)
         try:
             execute_scenario(
                 self.controller,
@@ -426,7 +447,8 @@ class ScenarioRunner:
                 except DroneError as exc:
                     record_event(self.store, self.logger, "Scenario landing failed", str(exc), level="WARN")
                     notify(self.ui, f"Landing failed: {exc}", level="WARN")
-            self.rc_loop.start()
+            if self._resume_rc_after_stop:
+                self.rc_loop.start()
 
 
 def record_scenario_step(
@@ -460,6 +482,58 @@ def update_tello_store(
     )
 
 
+class BatteryPoller:
+    def __init__(
+        self,
+        controller: DroneController,
+        store: TelemetryStore | None,
+        *,
+        interval: float = BATTERY_REFRESH_SECONDS,
+    ) -> None:
+        self.controller = controller
+        self.store = store
+        self.interval = max(1.0, float(interval))
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_error: str | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="battery-poller", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout)
+
+    def poll_once(self) -> int | None:
+        try:
+            battery = self.controller.refresh_battery()
+        except Exception as exc:  # noqa: BLE001
+            self._record_error(exc)
+            return None
+        self._last_error = None
+        update_tello_store(self.store, self.controller, battery=battery)
+        return battery
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            if not self.controller.connected:
+                continue
+            self.poll_once()
+
+    def _record_error(self, exc: Exception) -> None:
+        message = str(exc)
+        if message == self._last_error:
+            return
+        self._last_error = message
+        if self.store:
+            self.store.add_event(f"Battery refresh failed: {message}", level="WARN")
+
+
 def record_command(
     store: TelemetryStore | None,
     logger: TelemetryLogger | None,
@@ -488,7 +562,8 @@ def record_event(
 
 
 class HitResponseCoordinator:
-    def __init__(self) -> None:
+    def __init__(self, action: str = HIT_RESPONSE_FLIP_LAND) -> None:
+        self.action = action
         self._lock = threading.Lock()
         self._triggered = False
         self._runtime: tuple[
@@ -538,6 +613,7 @@ class HitResponseCoordinator:
             scenario_runner,
             store,
             logger,
+            action=self.action,
             data=data,
         )
 
@@ -549,21 +625,32 @@ def handle_hit_response(
     scenario_runner: ScenarioRunner,
     store: TelemetryStore | None,
     logger: TelemetryLogger | None,
+    action: str = HIT_RESPONSE_FLIP_LAND,
     data: object | None = None,
 ) -> None:
     if not controller.connected or not controller.airborne:
         return
 
     if scenario_runner.is_running():
-        scenario_runner.request_stop()
+        scenario_runner.request_stop(resume_rc=False)
 
     rc_state.stop_motion()
     rc_loop.stop()
 
-    detail = "flip forward then land"
+    detail = "emergency motor stop (free fall)" if action == HIT_RESPONSE_FREE_FALL else "flip forward then land"
     if data is not None:
         detail = f"{detail} ({getattr(data, 'state', 'hit')})"
     record_event(store, logger, "Jetson hit command received", detail, level="WARN")
+
+    if action == HIT_RESPONSE_FREE_FALL:
+        try:
+            controller.emergency()
+            record_command(store, logger, controller, "emergency free fall")
+            controller.end()
+        except DroneError as exc:
+            record_event(store, logger, "Emergency free fall failed", str(exc), level="WARN")
+        update_tello_store(store, controller)
+        return
 
     try:
         controller.flip_forward()
@@ -586,7 +673,7 @@ def main(argv: list[str] | None = None) -> int:
 
     controller: DroneController | None = None
     logger: TelemetryLogger | None = None
-    hit_response = HitResponseCoordinator() if args.auto_hit_response else None
+    hit_response = HitResponseCoordinator(args.hit_response) if args.auto_hit_response else None
     try:
         safety = make_safety(args)
         store = TelemetryStore()

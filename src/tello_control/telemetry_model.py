@@ -46,8 +46,16 @@ class PTZData:
 @dataclass(frozen=True)
 class AudioData:
     enabled: bool | None = None
+    drone_detected: bool | None = None
+    sector: str | None = None
+    sector_index: int | None = None
+    sector_count: int | None = None
+    target_motor_deg: float | None = None
     direction_deg: float | None = None
     confidence: float | None = None
+    detected: bool | None = None
+    fallback_active: bool | None = None
+    status: str | None = None
 
 
 @dataclass(frozen=True)

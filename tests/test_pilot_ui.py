@@ -33,6 +33,11 @@ class PilotUITest(unittest.TestCase):
         self.assertIn("Tello Pilot", output)
         self.assertIn("battery=85%", output)
         self.assertIn("2 flip forward", output)
+        self.assertIn("Scenario 1  RC front-view infinity", output)
+        self.assertIn(
+            "Scenario 4  Stage demo: up 50cm, forward/left/right 200cm, up 100cm, hover until hit",
+            output,
+        )
         self.assertIn("Last command  takeoff", output)
 
 

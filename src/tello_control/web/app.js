@@ -5,6 +5,7 @@ const keyStats = document.getElementById("keyStats");
 const nodeStatus = document.getElementById("nodeStatus");
 const connection = document.getElementById("connection");
 const liveClock = document.getElementById("liveClock");
+const telloBadge = document.getElementById("telloBadge");
 const jetsonBadge = document.getElementById("jetsonBadge");
 const radar = document.getElementById("radar");
 const radarCtx = radar.getContext("2d");
@@ -23,13 +24,26 @@ const GRAPH_SERIES = [
   { key: "audio_confidence", label: "Audio Confidence", min: 0, max: 1, color: "#40d8d0" },
 ];
 
-const CAMERA_FOV_DEG = 110;
+const CAMERA_FOV_DEG = 90;
 const CAMERA_FOV_HALF_DEG = CAMERA_FOV_DEG / 2;
 const MOTOR_RING_SCALE = 0.9;
+const PAN_TICK_RANGE = 4096;
+const DEFAULT_FRONT_PAN_TICK = 2048;
+const PAN_DIRECTION = 1;
 const STATE_STEPS = ["IDLE", "SEARCH", "TRACK", "LOCK", "FIRE"];
+
+const GRAPH_RENDER_INTERVAL_MS = 250;
+const STATUS_RENDER_INTERVAL_MS = 50;
 
 let reconnectTimer = null;
 let lastSnapshot = null;
+let pendingSnapshot = null;
+let renderQueued = false;
+let lastRenderAt = -Infinity;
+let lastGraphRenderAt = -Infinity;
+let lastHistorySignature = "";
+let lastEventsSignature = "";
+let lastMotorDirection = null;
 let lastHitCount = null;
 let lastLaserHit = false;
 let hitFlashUntil = 0;
@@ -48,8 +62,8 @@ function connect() {
   };
 
   ws.onmessage = (event) => {
-    lastSnapshot = JSON.parse(event.data);
-    render(lastSnapshot);
+    pendingSnapshot = JSON.parse(event.data);
+    scheduleRender();
   };
 
   ws.onclose = () => {
@@ -63,12 +77,48 @@ function connect() {
   };
 }
 
+function scheduleRender() {
+  if (renderQueued) {
+    return;
+  }
+  renderQueued = true;
+  requestAnimationFrame(renderPendingSnapshot);
+}
+
+function renderPendingSnapshot() {
+  renderQueued = false;
+  if (!pendingSnapshot) {
+    return;
+  }
+  const snapshot = pendingSnapshot;
+  pendingSnapshot = null;
+  lastSnapshot = snapshot;
+  render(snapshot);
+}
+
 function render(snapshot) {
+  const now = performance.now();
   updateHitVisualization(snapshot);
-  updateStatus(snapshot);
-  drawRadar(snapshot.tracking);
-  drawGraphs(snapshot.history || []);
-  drawEvents(snapshot.events || []);
+  if (now - lastRenderAt >= STATUS_RENDER_INTERVAL_MS || isHitFlashActive()) {
+    updateStatus(snapshot);
+    drawRadar(snapshot.tracking);
+    lastRenderAt = now;
+  }
+
+  const history = snapshot.history || [];
+  const historySignature = sampleSignature(history);
+  if (historySignature !== lastHistorySignature && now - lastGraphRenderAt >= GRAPH_RENDER_INTERVAL_MS) {
+    drawGraphs(history);
+    lastHistorySignature = historySignature;
+    lastGraphRenderAt = now;
+  }
+
+  const eventItems = snapshot.events || [];
+  const eventsSignature = sampleSignature(eventItems);
+  if (eventsSignature !== lastEventsSignature) {
+    drawEvents(eventItems);
+    lastEventsSignature = eventsSignature;
+  }
 }
 
 function updateStatus(snapshot) {
@@ -81,10 +131,16 @@ function updateStatus(snapshot) {
   const telemetryRate = typeof latest.telemetry_rate_hz === "number" ? latest.telemetry_rate_hz : null;
   const confidence = numberOr(tracking.confidence, latest.confidence);
   const fps = numberOr(tracking.fps, latest.fps);
-  const audioConfidence = numberOr(audio.confidence, latest.audio_confidence);
+  const audioActive = audio.fallback_active === true;
+  const audioConfidence = audioActive ? numberOr(audio.confidence, latest.audio_confidence) : null;
   const trackingError = trackingErrorPx(tracking, latest);
   const latency = numberOr(latest.latency_ms, null);
   const lockState = displayState(tracking, laser);
+  const vision = visionState(tracking);
+  const audioAssist = audioAssistState(tracking);
+  const audioAlignment = audioActive ? angleDeltaDeg(audioTargetDeg(audio), motorDirection) : null;
+  const fire = fireState(laser);
+  const telemetry = telemetryState(snapshot);
   const bboxSize = bboxAreaRatio(tracking);
   const hitActive = isHitFlashActive() || Boolean(laser.hit_detected);
   const hitCount = snapshot.hit_count ?? latest.hit_count ?? 0;
@@ -93,7 +149,7 @@ function updateStatus(snapshot) {
     statusMeter("Drone Battery", tello.battery, 0, 100, "%", "#f0c84b"),
     statusMeter("YOLO Confidence", confidence, 0, 1, "", "#43d17a"),
     statusMeter("Audio Confidence", audioConfidence, 0, 1, "", "#40d8d0"),
-    statusMeter("Signal Quality", signalQuality(snapshot), 0, 100, "%", "#b3e36a"),
+    statusMeter("Telemetry Freshness", telemetry.score, 0, 100, "", "#b3e36a", telemetry.detail),
   ];
 
   const rows = [
@@ -101,17 +157,23 @@ function updateStatus(snapshot) {
     statusText("Airborne", yesNo(tello.airborne)),
     statusText("Speed mode", formatValue(tello.speed, " cm/s")),
     statusText("Last command", tello.last_command || "-"),
-    statusText("Jetson status", snapshot.jetson_status || "-"),
+    statusText("Jetson telemetry", telemetry.label),
+    statusText("Jetson state", String(tracking.state || "-").toUpperCase()),
     statusText("Telemetry rate", formatValue(telemetryRate, " Hz")),
     statusText("Last received", age(snapshot.last_received_age)),
-    statusText("Motor angle", formatDegrees(motorDirection)),
-    statusText("Audio bearing", formatDegrees(audio.direction_deg)),
+    statusText("Motor heading", formatDegrees(motorDirection)),
+    statusText("Audio target", audioActive ? formatDegrees(audioTargetDeg(audio)) : "-"),
+    statusText("Audio alignment", audioActive ? formatSignedDegrees(audioAlignment) : "-"),
+    statusText("Audio status", audioAssist.detail),
+    statusText("Fire result", fire.detail),
     statusText("Target size", formatRatio(bboxSize)),
   ];
 
   const stats = [
-    keyStat("Lock-on", lockState, stateClass(lockState)),
-    keyStat("Laser", laser.hit_detected ? "HIT" : laser.armed ? "ON" : "OFF", hitActive ? "danger hit-pulse" : laser.armed ? "danger" : "muted"),
+    keyStat("Vision", vision.label, vision.className),
+    keyStat("Audio Assist", audioAssist.label, audioAssist.className),
+    keyStat("Fire Result", fire.label, fire.className),
+    keyStat("Laser Output", laser.hit_detected ? "HIT" : laser.armed ? "ON" : "OFF", hitActive ? "danger hit-pulse" : laser.armed ? "danger" : "muted"),
     keyStat("Hits", hitCount, hitActive ? "danger hit-pulse" : "success"),
     keyStat("Shots", snapshot.shot_count ?? latest.shot_count ?? 0, "warn"),
     keyStat("Error", formatValue(trackingError, " px"), trackingError !== null && trackingError <= 80 ? "success" : "warn"),
@@ -124,8 +186,12 @@ function updateStatus(snapshot) {
   stateStrip.innerHTML = STATE_STEPS.map((step) => renderStateStep(step, lockState)).join("");
   nodeStatus.innerHTML = renderNodes(snapshot, tracking);
 
+  const telloConnected = Boolean(tello.connected);
+  telloBadge.textContent = telloConnected ? "TELLO ON" : "TELLO OFF";
+  telloBadge.className = `badge tello ${telloConnected ? "connected" : "disconnected"}`;
+
   const status = (snapshot.jetson_status || "DISCONNECTED").toLowerCase();
-  jetsonBadge.textContent = snapshot.jetson_status || "DISCONNECTED";
+  jetsonBadge.textContent = telemetry.badge;
   jetsonBadge.className = `badge ${status}`;
 }
 
@@ -145,23 +211,27 @@ function drawRadar(tracking) {
   drawRadarCenter(cx, cy, isHitFlashActive() || Boolean(tracking && tracking.laser && tracking.laser.hit_detected));
 
   if (!tracking) {
-    radarReadout.textContent = "Motor - | FOV 110 deg | Bearing only";
+    radarReadout.textContent = `Motor - | FOV ${CAMERA_FOV_DEG} deg | Bearing only`;
     return;
   }
 
   const motorDirection = motorDirectionDeg(tracking);
   const audio = tracking.audio || {};
   const lockState = displayState(tracking, tracking.laser || {});
-  const showAudioBearing = lockState === "SEARCHING";
+  const showAudioBearing = shouldShowAudioBearing(tracking);
+  const audioTarget = audioTargetDeg(audio);
 
-  if (showAudioBearing && typeof audio.direction_deg === "number") {
-    drawAudioBearing(audio.direction_deg, audio.confidence, radius);
+  if (showAudioBearing) {
+    drawAudioBearing(audioTarget, audio.confidence, radius);
   }
   if (typeof motorDirection === "number") {
     drawMotorMarker(motorDirection, lockState, radius * MOTOR_RING_SCALE, tracking && tracking.laser && tracking.laser.hit_detected);
   }
+  drawRadarLegend(showAudioBearing);
 
-  radarReadout.textContent = `Motor ${formatDegrees(motorDirection)} | FOV ${CAMERA_FOV_DEG} deg | Bearing only | Audio ${showAudioBearing ? formatDegrees(audio.direction_deg) : "-"}`;
+  radarReadout.textContent = showAudioBearing
+    ? `Motor heading ${formatDegrees(motorDirection)} | FOV ${CAMERA_FOV_DEG} deg | Audio target ${formatDegrees(audioTarget)}`
+    : `Motor heading ${formatDegrees(motorDirection)} | FOV ${CAMERA_FOV_DEG} deg`;
 }
 
 function drawRadarGrid(cx, cy, radius) {
@@ -189,7 +259,7 @@ function drawFov(cx, cy, radius, tracking) {
   if (typeof center !== "number") {
     return;
   }
-  const normalizedCenter = normalizeDegrees(center);
+  const normalizedCenter = radarDisplayDegrees(center);
   const start = bearingToCanvasRadians(normalizedCenter + CAMERA_FOV_HALF_DEG);
   const end = bearingToCanvasRadians(normalizedCenter - CAMERA_FOV_HALF_DEG);
   radarCtx.fillStyle = "rgba(83, 167, 255, 0.14)";
@@ -211,25 +281,30 @@ function drawFov(cx, cy, radius, tracking) {
   radarCtx.stroke();
 }
 
-function drawAudioBearing(degrees, confidence, radius) {
+function drawAudioBearing(targetDegrees, confidence, radius) {
+  if (typeof targetDegrees !== "number") {
+    return;
+  }
   const cx = radar.width / 2;
   const cy = radar.height / 2;
   const alpha = typeof confidence === "number" ? 0.25 + Math.max(0, Math.min(1, confidence)) * 0.75 : 0.65;
-  const lineWidth = typeof confidence === "number" ? 2 + confidence * 5 : 3;
-  const point = directionPoint(cx, cy, degrees, radius * 0.9);
+  const displayTarget = radarDisplayDegrees(targetDegrees);
+  const point = directionPoint(cx, cy, displayTarget, radius * 0.82);
 
   radarCtx.save();
   radarCtx.globalAlpha = alpha;
   radarCtx.strokeStyle = "#40d8d0";
   radarCtx.fillStyle = "#40d8d0";
-  radarCtx.lineWidth = lineWidth;
+  radarCtx.lineWidth = 4;
+  radarCtx.setLineDash([8, 6]);
   radarCtx.beginPath();
   radarCtx.moveTo(cx, cy);
   radarCtx.lineTo(point.x, point.y);
   radarCtx.stroke();
+  radarCtx.setLineDash([]);
 
-  const headA = directionPoint(point.x, point.y, degrees + 145, 14);
-  const headB = directionPoint(point.x, point.y, degrees - 145, 14);
+  const headA = directionPoint(point.x, point.y, displayTarget + 145, 12);
+  const headB = directionPoint(point.x, point.y, displayTarget - 145, 12);
   radarCtx.beginPath();
   radarCtx.moveTo(point.x, point.y);
   radarCtx.lineTo(headA.x, headA.y);
@@ -239,10 +314,22 @@ function drawAudioBearing(degrees, confidence, radius) {
   radarCtx.restore();
 }
 
+function drawRadarLegend(audioVisible) {
+  if (!audioVisible) {
+    return;
+  }
+  radarCtx.save();
+  radarCtx.font = "11px system-ui";
+  radarCtx.textAlign = "left";
+  radarCtx.fillStyle = "#40d8d0";
+  radarCtx.fillText("Audio search target", 16, radar.height - 16);
+  radarCtx.restore();
+}
+
 function drawMotorMarker(degrees, lockState, length, laserHit = false) {
   const cx = radar.width / 2;
   const cy = radar.height / 2;
-  const point = directionPoint(cx, cy, degrees, length);
+  const point = directionPoint(cx, cy, radarDisplayDegrees(degrees), length);
   const activeHit = laserHit || isHitFlashActive();
   const locked = lockState === "LOCKED" || lockState === "FIRING" || activeHit;
   const color = activeHit ? "#ff3b3b" : locked ? "#ff5f5f" : "#f0c84b";
@@ -286,6 +373,10 @@ function directionPoint(cx, cy, degrees, length) {
 
 function bearingToCanvasRadians(degrees) {
   return (270 - normalizeDegrees(degrees)) * (Math.PI / 180);
+}
+
+function radarDisplayDegrees(degrees) {
+  return normalizeDegrees(360 - degrees);
 }
 
 function drawRadarCenter(cx, cy, activeHit = false) {
@@ -448,6 +539,18 @@ function latestHistorySample(snapshot) {
   return history.length ? history[history.length - 1] : {};
 }
 
+function sampleSignature(items) {
+  if (!items.length) {
+    return "0";
+  }
+  const last = items[items.length - 1];
+  const timestamp = last && typeof last.timestamp !== "undefined" ? last.timestamp : "";
+  const count = last && typeof last.hit_count !== "undefined" ? last.hit_count : "";
+  const frame = last && typeof last.frame_id !== "undefined" ? last.frame_id : "";
+  const message = last && typeof last.message !== "undefined" ? last.message : "";
+  return `${items.length}:${timestamp}:${count}:${frame}:${message}`;
+}
+
 function renderStatusRow(row) {
   return `<dt>${row.label}</dt><dd>${row.value}</dd>`;
 }
@@ -456,7 +559,7 @@ function renderStatusMeter(row) {
   const width = Number.isFinite(row.width) ? Math.max(0, Math.min(100, row.width)) : 0;
   return `
     <div class="status-meter">
-      <div class="meter-label"><span>${row.label}</span><strong>${row.value}</strong></div>
+      <div class="meter-label"><span>${row.label}</span><strong>${row.displayValue || row.value}</strong></div>
       <div class="meter-track">
         <div class="meter-fill" style="width:${width}%; background:${row.color}"></div>
       </div>
@@ -476,6 +579,7 @@ function renderStateStep(step, state) {
 function renderNodes(snapshot, tracking) {
   const ultraPs = tracking.ultra_ps || tracking.ultraPs || tracking.ultraps;
   const nodes = [
+    { label: "Tello", online: Boolean(snapshot.tello && snapshot.tello.connected) },
     { label: "Jetson", online: snapshot.jetson_status === "CONNECTED" },
     { label: "Ultra96", online: Boolean(ultraPs) && snapshot.jetson_status === "CONNECTED" },
     { label: "RPi", online: true },
@@ -489,13 +593,14 @@ function statusText(label, value) {
   return { label, value };
 }
 
-function statusMeter(label, value, min, max, suffix, color) {
+function statusMeter(label, value, min, max, suffix, color, displayValue = null) {
   const numeric = typeof value === "number" ? value : null;
-  const displayValue = numeric === null ? "-" : formatValue(numeric, suffix);
+  const formattedValue = numeric === null ? "-" : formatValue(numeric, suffix);
   const width = numeric === null ? 0 : ((numeric - min) / (max - min)) * 100;
   return {
     label,
-    value: displayValue,
+    value: formattedValue,
+    displayValue,
     width,
     color,
   };
@@ -522,7 +627,8 @@ function trackingErrorPx(tracking, latest) {
 
 function displayState(tracking, laser) {
   const raw = String(tracking.state || "").toUpperCase();
-  if (laser.hit_detected || laser.armed || raw.includes("FIR")) {
+  const fire = laser.fire || {};
+  if (laser.hit_detected || laser.fired || fire.active || raw.includes("FIR")) {
     return "FIRING";
   }
   if (raw.includes("LOCK")) {
@@ -535,6 +641,68 @@ function displayState(tracking, laser) {
     return "SEARCHING";
   }
   return "IDLE";
+}
+
+function visionState(tracking) {
+  const raw = String(tracking.state || "").toUpperCase();
+  const found = tracking.target_found === true;
+  if (raw.includes("LOCK")) {
+    return { label: "LOCKED", className: "success" };
+  }
+  if (found && (raw.includes("TRACK") || raw.includes("DETECT"))) {
+    return { label: raw.includes("DETECT") ? "DETECTED" : "TRACKING", className: "track" };
+  }
+  if (found) {
+    return { label: "TARGET FOUND", className: "track" };
+  }
+  return { label: raw.includes("SCAN") ? "SCANNING" : "NO TARGET", className: "search" };
+}
+
+function audioAssistState(tracking) {
+  const audio = tracking.audio || {};
+  const enabled = audio.enabled === true;
+  const active = audio.fallback_active === true;
+  const status = typeof audio.status === "string" && audio.status ? audio.status : "";
+  const confidence = formatRatio(typeof audio.confidence === "number" ? audio.confidence : null);
+  if (!enabled) {
+    return { label: "OFF", className: "muted", detail: status || "disabled" };
+  }
+  if (active) {
+    const sector = audio.sector || "-";
+    const delta = angleDeltaDeg(audioTargetDeg(audio), motorDirectionDeg(tracking));
+    return { label: "ACTIVE", className: "warn", detail: status || `${sector} ${formatDegrees(audioTargetDeg(audio))} err ${formatSignedDegrees(delta)} conf ${confidence}` };
+  }
+  return { label: "VISION", className: "muted", detail: status || "hidden" };
+}
+
+function fireState(laser) {
+  const fire = laser.fire || {};
+  const rawResult = typeof fire.result === "string" && fire.result ? fire.result : "idle";
+  const result = rawResult.toUpperCase();
+  if (laser.hit_detected || result === "HIT") {
+    return { label: "HIT", className: "danger hit-pulse", detail: result };
+  }
+  if (laser.fired || fire.active) {
+    return { label: "ACTIVE", className: "warn", detail: result === "IDLE" ? "FIRE ACTIVE" : result };
+  }
+  if (result === "MISS") {
+    return { label: "MISS", className: "warn", detail: result };
+  }
+  return { label: result, className: "muted", detail: result };
+}
+
+function telemetryState(snapshot) {
+  const status = String(snapshot.jetson_status || "DISCONNECTED").toUpperCase();
+  const ageSec = snapshot.last_received_age;
+  const score = signalQuality(snapshot);
+  const detail = typeof ageSec === "number" ? `${ageSec.toFixed(2)}s ago` : "-";
+  if (status === "CONNECTED") {
+    return { label: "LIVE", badge: `JETSON LIVE ${detail}`, detail, score };
+  }
+  if (status === "STALE") {
+    return { label: "STALE", badge: `JETSON STALE ${detail}`, detail, score };
+  }
+  return { label: "DISCONNECTED", badge: "JETSON OFF", detail, score };
 }
 
 function stateClass(state) {
@@ -568,22 +736,62 @@ function bboxAreaRatio(tracking) {
   return Math.max(0, Math.min(1, (bbox.w * bbox.h) / (frame.width * frame.height)));
 }
 
+function shouldShowAudioBearing(tracking) {
+  const audio = tracking.audio || {};
+  if (audio.fallback_active !== true) {
+    return false;
+  }
+  return typeof audioTargetDeg(audio) === "number";
+}
+
+function audioTargetDeg(audio) {
+  if (typeof audio.target_motor_deg === "number") {
+    return normalizeDegrees(audio.target_motor_deg);
+  }
+  return null;
+}
+
+function angleDeltaDeg(target, current) {
+  if (typeof target !== "number" || typeof current !== "number") {
+    return null;
+  }
+  return ((normalizeDegrees(target) - normalizeDegrees(current) + 540) % 360) - 180;
+}
+
 function motorDirectionDeg(tracking) {
   const ultraPs = tracking.ultra_ps || tracking.ultraPs || tracking.ultraps || {};
+  const tickHeading = motorDirectionFromTick(tracking, ultraPs);
+  if (typeof tickHeading === "number") {
+    return rememberMotorDirection(tickHeading);
+  }
   if (typeof ultraPs.motor_deg === "number") {
-    return normalizeDegrees(ultraPs.motor_deg);
+    return rememberMotorDirection(ultraPs.motor_deg);
   }
-  if (typeof ultraPs.front_pan === "number" && typeof ultraPs.pan_tick === "number") {
-    return normalizeDegrees(((ultraPs.front_pan - ultraPs.pan_tick) * 360) / 4096);
+  const fallback = tracking.ptz && tracking.ptz.pan_deg;
+  return typeof fallback === "number" ? rememberMotorDirection(fallback) : lastMotorDirection;
+}
+
+function motorDirectionFromTick(tracking, ultraPs) {
+  const ptz = tracking.ptz || {};
+  const panTick = typeof ultraPs.pan_tick === "number" ? ultraPs.pan_tick : ptz.pan_cmd;
+  if (typeof panTick !== "number") {
+    return null;
   }
-  const fallback = [
-    ultraPs.motor_direction_deg,
-    ultraPs.fan_deg,
-    ultraPs.heading_deg,
-    ultraPs.direction_deg,
-    tracking.ptz && tracking.ptz.pan_deg,
-  ].find((value) => typeof value === "number");
-  return typeof fallback === "number" ? normalizeDegrees(fallback) : fallback;
+  if (tracking.target_found === false && isDefaultPanTick(panTick) && typeof lastMotorDirection === "number") {
+    return null;
+  }
+  const frontPan = typeof ultraPs.front_pan === "number" ? ultraPs.front_pan : DEFAULT_FRONT_PAN_TICK;
+  return normalizeDegrees(((frontPan - panTick) * 360 * PAN_DIRECTION) / PAN_TICK_RANGE);
+}
+
+function rememberMotorDirection(value) {
+  const normalized = normalizeDegrees(value);
+  lastMotorDirection = normalized;
+  return normalized;
+}
+
+function isDefaultPanTick(value) {
+  return Math.abs(value - DEFAULT_FRONT_PAN_TICK) <= 2;
 }
 
 function normalizeDegrees(value) {
@@ -595,6 +803,14 @@ function formatDegrees(value) {
     return "-";
   }
   return `${normalizeDegrees(value).toFixed(0).padStart(3, "0")} deg`;
+}
+
+function formatSignedDegrees(value) {
+  if (typeof value !== "number") {
+    return "-";
+  }
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(0)} deg`;
 }
 
 function formatRatio(value) {
@@ -641,7 +857,7 @@ function tickClock() {
   const clock = new Date().toLocaleTimeString();
   liveClock.textContent = `LIVE ${clock}`;
   renderHitOverlay();
-  if (lastSnapshot) {
+  if (lastSnapshot && isHitFlashActive()) {
     drawRadar(lastSnapshot.tracking);
   }
 }

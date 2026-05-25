@@ -93,6 +93,10 @@ def execute_step(
             stop_event,
         )
         return
+    if command == "wait_until_stop":
+        controller._require_airborne()
+        wait_until_stop(stop_event)
+        return
     if command == "rc":
         execute_rc_step(
             controller,
@@ -111,6 +115,14 @@ def execute_step(
             _int_param(params, "z", minimum=-500, maximum=500),
             _int_param(params, "speed", minimum=10, maximum=100),
         )
+        return
+    if command in {"rotate_left", "rotate_right"}:
+        degrees = _int_param(params, "degrees", minimum=1, maximum=360)
+        controller._require_airborne()
+        if command == "rotate_left":
+            controller.tello.rotate_counter_clockwise(degrees)
+        else:
+            controller.tello.rotate_clockwise(degrees)
         return
 
     cm = _int_param(params, "cm", minimum=20, maximum=500)
@@ -145,6 +157,8 @@ def _validate_step(step: ScenarioStep) -> None:
     if step.command == "wait":
         _float_param(step.params, "seconds", minimum=0.0, maximum=60.0)
         return
+    if step.command == "wait_until_stop":
+        return
     if step.command == "rc":
         _int_param(step.params, "left_right", minimum=-100, maximum=100)
         _int_param(step.params, "forward_back", minimum=-100, maximum=100)
@@ -159,6 +173,9 @@ def _validate_step(step: ScenarioStep) -> None:
         _int_param(step.params, "speed", minimum=10, maximum=100)
         if max(abs(x), abs(y), abs(z)) < 20:
             raise DroneError("Scenario go command must move at least 20 cm on one axis.")
+        return
+    if step.command in {"rotate_left", "rotate_right"}:
+        _int_param(step.params, "degrees", minimum=1, maximum=360)
         return
     if step.command in {"forward", "back", "left", "right", "up", "down"}:
         _int_param(step.params, "cm", minimum=20, maximum=500)
@@ -195,6 +212,13 @@ def wait_interruptibly(seconds: float, stop_event: threading.Event | None) -> No
         time.sleep(seconds)
         return
     stop_event.wait(seconds)
+
+
+def wait_until_stop(stop_event: threading.Event | None) -> None:
+    if stop_event is None:
+        raise DroneError("Scenario wait_until_stop requires a stop event.")
+    stop_event.wait()
+    raise DroneError("Scenario stopped by operator.")
 
 
 def _int_field(

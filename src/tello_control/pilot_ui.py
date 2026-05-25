@@ -21,6 +21,14 @@ class PilotUIConfig:
     min_width: int = 72
 
 
+SCENARIO_HELP_LINES = (
+    "Scenario 1  RC front-view infinity",
+    "Scenario 2  SDK corner: up/right/down/left 50cm, 1s waits",
+    "Scenario 3  Demo rectangle center return",
+    "Scenario 4  Stage demo: up 50cm, forward/left/right 200cm, up 100cm, hover until hit",
+)
+
+
 class PilotTerminalUI:
     """Small ANSI terminal dashboard that stays inside the active SSH session."""
 
@@ -133,6 +141,8 @@ def render_pilot_ui(
         "  t takeoff   l land   w/s/a/d move   arrows up/down/yaw",
         "  1 flip left   2 flip forward   3 flip back   4 flip right",
         "  p run scenario   x land now   e emergency stop   q quit",
+        "",
+        *SCENARIO_HELP_LINES,
         "",
         f"Safety  min battery={controller.safety.min_battery}%  "
         f"flip min battery={controller.safety.min_flip_battery}%  "
